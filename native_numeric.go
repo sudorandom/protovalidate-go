@@ -213,7 +213,7 @@ func tryBuildNativeNumericRules[T numericValue, R numericRules[T]](
 		return nil
 	}
 
-	return &nativeNumericCompare[T]{
+	eval := &nativeNumericCompare[T]{
 		base:      base,
 		config:    config,
 		lo:        lowerValue,
@@ -225,6 +225,8 @@ func tryBuildNativeNumericRules[T numericValue, R numericRules[T]](
 		notInVals: notInVals,
 		finite:    finite,
 	}
+	eval.buildViolationSites()
+	return eval
 }
 
 // numericRules is satisfied by all generated numeric rules types
@@ -425,6 +427,44 @@ type nativeNumericCompare[T numericValue] struct {
 	inVals    []T        // slice of values for IN comparison
 	notInVals []T        // slice of values for NOT_IN comparison
 	finite    bool       // true if the value is finite (not NaN or Infinity)
+
+	// The rule ID, message, and rule value of each rule's violation only
+	// depend on the rules, so they are built once by buildViolationSites.
+	constSite      ruleSite
+	constRuleValue protoreflect.Value
+	rangeSite      ruleSite
+	rangeRuleValue protoreflect.Value
+	inSite         ruleSite
+	inRuleValue    protoreflect.Value
+	notInSite      ruleSite
+	notInRuleValue protoreflect.Value
+}
+
+func (n *nativeNumericCompare[T]) buildViolationSites() {
+	descs := &n.config.descs
+	if n.constVal != nil {
+		n.constSite = fixedMessageSite(descs.constSite,
+			n.config.typeName+".const", "must equal "+format(*n.constVal))
+		n.constRuleValue = n.config.makeRuleVal(*n.constVal)
+	}
+	if n.lower != lowerBoundNone || n.upper != upperBoundNone {
+		n.rangeSite = rangeViolationSite(descs, n.config.typeName,
+			n.lower, format(n.lo), n.upper, format(n.hi), n.isNormalRange())
+		n.rangeRuleValue = n.config.makeRuleVal(n.lo)
+		if n.lower == lowerBoundNone {
+			n.rangeRuleValue = n.config.makeRuleVal(n.hi)
+		}
+	}
+	if len(n.inVals) > 0 {
+		n.inSite = fixedMessageSite(descs.inSite,
+			n.config.typeName+".in", "must be in list "+formatList(n.inVals))
+		n.inRuleValue = sliceToListValue(n.config.newRules(), descs.inSite.desc, n.inVals, n.config.makeRuleVal)
+	}
+	if len(n.notInVals) > 0 {
+		n.notInSite = fixedMessageSite(descs.notInSite,
+			n.config.typeName+".not_in", "must not be in list "+formatList(n.notInVals))
+		n.notInRuleValue = sliceToListValue(n.config.newRules(), descs.notInSite.desc, n.notInVals, n.config.makeRuleVal)
+	}
 }
 
 // belowLo reports whether v violates the lower bound.
@@ -448,111 +488,33 @@ func (n *nativeNumericCompare[T]) isNormalRange() bool {
 	return n.hi >= n.lo
 }
 
-func (n *nativeNumericCompare[T]) loSite() ruleSite {
-	if n.lower == lowerBoundGt {
-		return n.config.descs.gtSite
-	}
-	return n.config.descs.gteSite
-}
-
-func (n *nativeNumericCompare[T]) hiSite() ruleSite {
-	if n.upper == upperBoundLt {
-		return n.config.descs.ltSite
-	}
-	return n.config.descs.lteSite
-}
-
-func (n *nativeNumericCompare[T]) gtRulePrefix() string {
-	if n.lower == lowerBoundGt {
-		return n.config.typeName + ".gt"
-	}
-	return n.config.typeName + ".gte"
-}
-
-func (n *nativeNumericCompare[T]) ltRulePrefix() string {
-	if n.upper == upperBoundLt {
-		return n.config.typeName + ".lt"
-	}
-	return n.config.typeName + ".lte"
-}
-
-func (n *nativeNumericCompare[T]) gtltRule() string {
-	if n.lower != lowerBoundNone {
-		prefix := n.gtRulePrefix()
-		switch n.upper {
-		case upperBoundLt:
-			prefix += "_lt"
-			if !n.isNormalRange() {
-				prefix += "_exclusive"
-			}
-		case upperBoundLte:
-			prefix += "_lte"
-			if !n.isNormalRange() {
-				prefix += "_exclusive"
-			}
-		}
-		return prefix
-	}
-	return n.ltRulePrefix()
-}
-
-func (n *nativeNumericCompare[T]) loMessage() string {
-	if n.lower == lowerBoundGt {
-		return "greater than " + format(n.lo)
-	}
-	return "greater than or equal to " + format(n.lo)
-}
-
-func (n *nativeNumericCompare[T]) hiMessage() string {
-	if n.upper == upperBoundLt {
-		return "less than " + format(n.hi)
-	}
-	return "less than or equal to " + format(n.hi)
-}
-
-func (n *nativeNumericCompare[T]) conjunction() string {
-	if n.isNormalRange() {
-		return "and"
-	}
-	return "or"
-}
-
 func (n *nativeNumericCompare[T]) Evaluate(_ protoreflect.Message, val protoreflect.Value, cfg *validationConfig) error {
 	valT := n.config.extractVal(val)
 	var violations []*Violation
 
 	if n.constVal != nil && valT != *n.constVal {
-		violations = append(violations, n.newViolation(n.config.descs.constSite,
-			n.config.typeName+".const",
-			"must equal "+format(*n.constVal),
-			val, n.config.makeRuleVal(*n.constVal)))
+		violations = append(violations, n.newViolation(n.constSite, "", "", val, n.constRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
 	}
 
-	if v := n.evaluateRange(valT, val); v != nil {
-		violations = append(violations, v)
+	if n.failsRange(valT) {
+		violations = append(violations, n.newViolation(n.rangeSite, "", "", val, n.rangeRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
 	}
 
 	if len(n.inVals) > 0 && !slices.Contains(n.inVals, valT) {
-		violations = append(violations, n.newViolation(n.config.descs.inSite,
-			n.config.typeName+".in",
-			"must be in list "+formatList(n.inVals),
-			val, sliceToListValue(n.config.newRules(), n.config.descs.inSite.desc, n.inVals, n.config.makeRuleVal)))
+		violations = append(violations, n.newViolation(n.inSite, "", "", val, n.inRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
 	}
 
 	if len(n.notInVals) > 0 && slices.Contains(n.notInVals, valT) {
-		violations = append(violations, n.newViolation(n.config.descs.notInSite,
-			n.config.typeName+".not_in",
-			"must not be in list "+formatList(n.notInVals),
-			val, sliceToListValue(n.config.newRules(), n.config.descs.notInSite.desc, n.notInVals, n.config.makeRuleVal)))
+		violations = append(violations, n.newViolation(n.notInSite, "", "", val, n.notInRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
@@ -576,45 +538,27 @@ func (n *nativeNumericCompare[T]) Evaluate(_ protoreflect.Message, val protorefl
 	return nil
 }
 
-// evaluateRange returns a violation for lower/upper bound checks, or nil.
-// Split out of Evaluate so that the hot path (no range rules) stays small
-// enough to inline.
-func (n *nativeNumericCompare[T]) evaluateRange(valT T, val protoreflect.Value) *Violation {
+// failsRange reports whether valT fails the lower/upper bound checks.
+func (n *nativeNumericCompare[T]) failsRange(valT T) bool {
 	if n.lower == lowerBoundNone && n.upper == upperBoundNone {
-		return nil
+		return false
 	}
 
 	// For float/double, NaN fails all range checks (matches CEL behavior).
-	isNaN := n.config.nanFailsRange && math.IsNaN(float64(valT))
+	if n.config.nanFailsRange && math.IsNaN(float64(valT)) {
+		return true
+	}
 
 	switch {
 	case n.lower == lowerBoundNone:
-		if isNaN || n.aboveHi(valT) {
-			return n.newViolation(n.hiSite(),
-				n.gtltRule(), "must be "+n.hiMessage(),
-				val, n.config.makeRuleVal(n.hi))
-		}
+		return n.aboveHi(valT)
 	case n.upper == upperBoundNone:
-		if isNaN || n.belowLo(valT) {
-			return n.newViolation(n.loSite(),
-				n.gtltRule(), "must be "+n.loMessage(),
-				val, n.config.makeRuleVal(n.lo))
-		}
+		return n.belowLo(valT)
+	case n.isNormalRange():
+		return n.aboveHi(valT) || n.belowLo(valT)
 	default:
-		var failure bool
-		if n.isNormalRange() {
-			failure = isNaN || n.aboveHi(valT) || n.belowLo(valT)
-		} else {
-			failure = isNaN || (n.aboveHi(valT) && n.belowLo(valT))
-		}
-		if failure {
-			return n.newViolation(n.loSite(),
-				n.gtltRule(),
-				fmt.Sprintf("must be %s %s %s", n.loMessage(), n.conjunction(), n.hiMessage()),
-				val, n.config.makeRuleVal(n.lo))
-		}
+		return n.aboveHi(valT) && n.belowLo(valT)
 	}
-	return nil
 }
 
 func (n *nativeNumericCompare[T]) Tautology() bool {
@@ -622,6 +566,42 @@ func (n *nativeNumericCompare[T]) Tautology() bool {
 }
 
 var _ evaluator = (*nativeNumericCompare[int32])(nil)
+
+// rangeViolationSite returns the violation site for a value outside the
+// gt/gte and lt/lte bounds of numeric, timestamp, or duration rules. lowText
+// and highText are the formatted bounds, and normalRange reports whether the
+// upper bound is at least the lower bound; otherwise the bounds exclude a
+// range.
+func rangeViolationSite(
+	descs *numericDescriptors,
+	typeName string,
+	lower lowerBound,
+	lowText string,
+	upper upperBound,
+	highText string,
+	normalRange bool,
+) ruleSite {
+	lowSite, lowRule, lowMessage := descs.gtSite, typeName+".gt", "greater than "+lowText
+	if lower == lowerBoundGte {
+		lowSite, lowRule, lowMessage = descs.gteSite, typeName+".gte", "greater than or equal to "+lowText
+	}
+	highSite, highRule, highMessage := descs.ltSite, "lt", "less than "+highText
+	if upper == upperBoundLte {
+		highSite, highRule, highMessage = descs.lteSite, "lte", "less than or equal to "+highText
+	}
+	switch {
+	case lower == lowerBoundNone:
+		return fixedMessageSite(highSite, typeName+"."+highRule, "must be "+highMessage)
+	case upper == upperBoundNone:
+		return fixedMessageSite(lowSite, lowRule, "must be "+lowMessage)
+	case normalRange:
+		return fixedMessageSite(lowSite, lowRule+"_"+highRule,
+			"must be "+lowMessage+" and "+highMessage)
+	default:
+		return fixedMessageSite(lowSite, lowRule+"_"+highRule+"_exclusive",
+			"must be "+lowMessage+" or "+highMessage)
+	}
+}
 
 // formatList formats a slice as "list [val1, val2]" to match CEL message format.
 func formatList[T any](vals []T) string {

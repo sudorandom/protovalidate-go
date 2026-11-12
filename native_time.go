@@ -188,6 +188,7 @@ func tryBuildNativeTimeCompare[T timeValue](
 			rules.Clear(site.desc)
 		}
 	}
+	eval.buildViolationSites()
 	return eval
 }
 
@@ -232,6 +233,34 @@ type nativeTimeCompare[T timeValue] struct {
 	inValue      protoreflect.Value
 	notInVals    []T
 	notInValue   protoreflect.Value
+
+	// The rule ID and message of each rule's violation only depend on the
+	// rules, so they are built once by buildViolationSites.
+	constSite ruleSite
+	rangeSite ruleSite
+	inSite    ruleSite
+	notInSite ruleSite
+}
+
+func (n *nativeTimeCompare[T]) buildViolationSites() {
+	descs := &n.config.descs
+	if n.constVal != nil {
+		n.constSite = fixedMessageSite(descs.constSite,
+			n.config.typeName+".const", "must equal "+n.config.format(n.constVal.value))
+	}
+	if n.lower != lowerBoundNone || n.upper != upperBoundNone {
+		n.rangeSite = rangeViolationSite(descs, n.config.typeName,
+			n.lower, n.config.format(n.lo.value), n.upper, n.config.format(n.hi.value),
+			n.config.compare(n.hi.value, n.lo.value) >= 0)
+	}
+	if len(n.inVals) > 0 {
+		n.inSite = fixedMessageSite(descs.inSite,
+			n.config.typeName+".in", "must be in list "+n.formatList(n.inVals))
+	}
+	if len(n.notInVals) > 0 {
+		n.notInSite = fixedMessageSite(descs.notInSite,
+			n.config.typeName+".not_in", "must not be in list "+n.formatList(n.notInVals))
+	}
 }
 
 func (n *nativeTimeCompare[T]) Evaluate(_ protoreflect.Message, val protoreflect.Value, cfg *validationConfig) error {
@@ -241,37 +270,32 @@ func (n *nativeTimeCompare[T]) Evaluate(_ protoreflect.Message, val protoreflect
 	var violations []*Violation
 
 	if n.constVal != nil && n.config.compare(valT, n.constVal.value) != 0 {
-		violations = append(violations, n.newViolation(n.config.descs.constSite,
-			n.config.typeName+".const",
-			"must equal "+n.config.format(n.constVal.value),
-			val, n.constVal.ruleValue))
+		violations = append(violations, n.newViolation(n.constSite, "", "", val, n.constVal.ruleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
 	}
 
-	if v := n.evaluateRange(valT, val); v != nil {
-		violations = append(violations, v)
+	if n.failsRange(valT) {
+		rangeRuleValue := n.lo.ruleValue
+		if n.lower == lowerBoundNone {
+			rangeRuleValue = n.hi.ruleValue
+		}
+		violations = append(violations, n.newViolation(n.rangeSite, "", "", val, rangeRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
 	}
 
 	if len(n.inVals) > 0 && !n.contains(n.inVals, valT) {
-		violations = append(violations, n.newViolation(n.config.descs.inSite,
-			n.config.typeName+".in",
-			"must be in list "+n.formatList(n.inVals),
-			val, n.inValue))
+		violations = append(violations, n.newViolation(n.inSite, "", "", val, n.inValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
 		}
 	}
 
 	if len(n.notInVals) > 0 && n.contains(n.notInVals, valT) {
-		violations = append(violations, n.newViolation(n.config.descs.notInSite,
-			n.config.typeName+".not_in",
-			"must not be in list "+n.formatList(n.notInVals),
-			val, n.notInValue))
+		violations = append(violations, n.newViolation(n.notInSite, "", "", val, n.notInValue))
 	}
 
 	if len(violations) > 0 {
@@ -280,40 +304,20 @@ func (n *nativeTimeCompare[T]) Evaluate(_ protoreflect.Message, val protoreflect
 	return nil
 }
 
-// evaluateRange returns a violation for lower/upper bound checks, or nil.
-func (n *nativeTimeCompare[T]) evaluateRange(valT T, val protoreflect.Value) *Violation {
+// failsRange reports whether valT fails the lower/upper bound checks.
+func (n *nativeTimeCompare[T]) failsRange(valT T) bool {
 	switch {
 	case n.lower == lowerBoundNone && n.upper == upperBoundNone:
-		return nil
+		return false
 	case n.lower == lowerBoundNone:
-		if n.aboveHi(valT) {
-			return n.newViolation(n.hiSite(), n.config.typeName+"."+n.ltRuleSuffix(),
-				"must be "+n.hiMessage(), val, n.hi.ruleValue)
-		}
+		return n.aboveHi(valT)
 	case n.upper == upperBoundNone:
-		if n.belowLo(valT) {
-			return n.newViolation(n.loSite(), n.gtRule(),
-				"must be "+n.loMessage(), val, n.lo.ruleValue)
-		}
+		return n.belowLo(valT)
+	case n.config.compare(n.hi.value, n.lo.value) >= 0:
+		return n.aboveHi(valT) || n.belowLo(valT)
 	default:
-		normalRange := n.config.compare(n.hi.value, n.lo.value) >= 0
-		var failure bool
-		if normalRange {
-			failure = n.aboveHi(valT) || n.belowLo(valT)
-		} else {
-			failure = n.aboveHi(valT) && n.belowLo(valT)
-		}
-		if failure {
-			rule, conjunction := n.gtRule()+"_"+n.ltRuleSuffix(), " and "
-			if !normalRange {
-				rule, conjunction = rule+"_exclusive", " or "
-			}
-			return n.newViolation(n.loSite(), rule,
-				"must be "+n.loMessage()+conjunction+n.hiMessage(),
-				val, n.lo.ruleValue)
-		}
+		return n.aboveHi(valT) && n.belowLo(valT)
 	}
-	return nil
 }
 
 func (n *nativeTimeCompare[T]) belowLo(value T) bool {
@@ -328,48 +332,6 @@ func (n *nativeTimeCompare[T]) aboveHi(value T) bool {
 		return n.config.compare(value, n.hi.value) >= 0
 	}
 	return n.config.compare(value, n.hi.value) > 0
-}
-
-func (n *nativeTimeCompare[T]) loSite() ruleSite {
-	if n.lower == lowerBoundGt {
-		return n.config.descs.gtSite
-	}
-	return n.config.descs.gteSite
-}
-
-func (n *nativeTimeCompare[T]) hiSite() ruleSite {
-	if n.upper == upperBoundLt {
-		return n.config.descs.ltSite
-	}
-	return n.config.descs.lteSite
-}
-
-func (n *nativeTimeCompare[T]) gtRule() string {
-	if n.lower == lowerBoundGt {
-		return n.config.typeName + ".gt"
-	}
-	return n.config.typeName + ".gte"
-}
-
-func (n *nativeTimeCompare[T]) ltRuleSuffix() string {
-	if n.upper == upperBoundLt {
-		return "lt"
-	}
-	return "lte"
-}
-
-func (n *nativeTimeCompare[T]) loMessage() string {
-	if n.lower == lowerBoundGt {
-		return "greater than " + n.config.format(n.lo.value)
-	}
-	return "greater than or equal to " + n.config.format(n.lo.value)
-}
-
-func (n *nativeTimeCompare[T]) hiMessage() string {
-	if n.upper == upperBoundLt {
-		return "less than " + n.config.format(n.hi.value)
-	}
-	return "less than or equal to " + n.config.format(n.hi.value)
 }
 
 func (n *nativeTimeCompare[T]) contains(values []T, value T) bool {

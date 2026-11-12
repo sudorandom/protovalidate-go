@@ -108,6 +108,15 @@ func makeRuleSite(ruleDesc, desc protoreflect.FieldDescriptor, ruleID string, me
 // desc is the specific constraint descriptor (e.g., Int32Rules.gt).
 //
 // it uses pre-built path elements in site instead of rebuilding them each call.
+// fixedMessageSite returns a copy of site that reports the given rule ID and
+// message, for violations whose rule ID and message only depend on the rules.
+// Building it once avoids formatting them for every violation.
+func fixedMessageSite(site ruleSite, ruleID string, message string) ruleSite {
+	site.ruleID = &ruleID
+	site.message = &message
+	return site
+}
+
 func (b *base) newViolation(
 	site ruleSite,
 	ruleID string,
