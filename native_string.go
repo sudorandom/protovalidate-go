@@ -60,105 +60,115 @@ func tryBuildNativeStringRules(base base, rules *validate.StringRules) evaluator
 		hasRule = true
 	}
 
-	var constVal *string
+	eval := &nativeStringEval{
+		base:          base,
+		wellKnownRule: wellKnownRule,
+		knownRegex:    knownRegex,
+		strict:        strict,
+	}
+
 	if rules.HasConst() {
-		constVal = new(rules.GetConst())
+		eval.constVal = newFixedRule(rules.GetConst(), strDescs.constSite,
+			"string.const", fmt.Sprintf("must equal `%s`", rules.GetConst()))
 		rules.ProtoReflect().Clear(strDescs.constSite.desc)
 		hasRule = true
 	}
 
-	var exactLen *uint64
 	if rules.HasLen() {
-		exactLen = new(rules.GetLen())
+		eval.exactLen = newFixedRule(rules.GetLen(), strDescs.lenSite,
+			"string.len", fmt.Sprintf("must be %d characters", rules.GetLen()))
 		rules.ProtoReflect().Clear(strDescs.lenSite.desc)
 		hasRule = true
 	}
 
-	var minLen *uint64
 	if rules.HasMinLen() {
-		minLen = new(rules.GetMinLen())
+		eval.minLen = newFixedRule(rules.GetMinLen(), strDescs.minLenSite,
+			"string.min_len", fmt.Sprintf("must be at least %d characters", rules.GetMinLen()))
 		rules.ProtoReflect().Clear(strDescs.minLenSite.desc)
 		hasRule = true
 	}
 
-	var maxLen *uint64
 	if rules.HasMaxLen() {
-		maxLen = new(rules.GetMaxLen())
+		eval.maxLen = newFixedRule(rules.GetMaxLen(), strDescs.maxLenSite,
+			"string.max_len", fmt.Sprintf("must be at most %d characters", rules.GetMaxLen()))
 		rules.ProtoReflect().Clear(strDescs.maxLenSite.desc)
 		hasRule = true
 	}
 
-	var exactBytes *uint64
 	if rules.HasLenBytes() {
-		exactBytes = new(rules.GetLenBytes())
+		eval.exactBytes = newFixedRule(rules.GetLenBytes(), strDescs.lenBytesSite,
+			"string.len_bytes", fmt.Sprintf("must be %d bytes", rules.GetLenBytes()))
 		rules.ProtoReflect().Clear(strDescs.lenBytesSite.desc)
 		hasRule = true
 	}
 
-	var minBytes *uint64
 	if rules.HasMinBytes() {
-		minBytes = new(rules.GetMinBytes())
+		eval.minBytes = newFixedRule(rules.GetMinBytes(), strDescs.minBytesSite,
+			"string.min_bytes", fmt.Sprintf("must be at least %d bytes", rules.GetMinBytes()))
 		rules.ProtoReflect().Clear(strDescs.minBytesSite.desc)
 		hasRule = true
 	}
 
-	var maxBytes *uint64
 	if rules.HasMaxBytes() {
-		maxBytes = new(rules.GetMaxBytes())
+		eval.maxBytes = newFixedRule(rules.GetMaxBytes(), strDescs.maxBytesSite,
+			"string.max_bytes", fmt.Sprintf("must be at most %d bytes", rules.GetMaxBytes()))
 		rules.ProtoReflect().Clear(strDescs.maxBytesSite.desc)
 		hasRule = true
 	}
 
-	var compiledPattern *regexp.Regexp
-	var patternStr string
 	if rules.HasPattern() {
-		patternStr = rules.GetPattern()
 		var err error
-		compiledPattern, err = regexp.Compile(patternStr)
+		eval.pattern, err = regexp.Compile(rules.GetPattern())
 		if err != nil {
 			// Invalid regex — bail to CEL which will also report a CompilationError.
 			return nil
 		}
+		eval.patternStr = newFixedRule(rules.GetPattern(), strDescs.patternSite,
+			"string.pattern", fmt.Sprintf("does not match regex pattern `%s`", rules.GetPattern()))
 		rules.ProtoReflect().Clear(strDescs.patternSite.desc)
 		hasRule = true
 	}
 
-	var prefix *string
 	if rules.HasPrefix() {
-		prefix = new(rules.GetPrefix())
+		eval.prefix = newFixedRule(rules.GetPrefix(), strDescs.prefixSite,
+			"string.prefix", fmt.Sprintf("does not have prefix `%s`", rules.GetPrefix()))
 		rules.ProtoReflect().Clear(strDescs.prefixSite.desc)
 		hasRule = true
 	}
 
-	var suffix *string
 	if rules.HasSuffix() {
-		suffix = new(rules.GetSuffix())
+		eval.suffix = newFixedRule(rules.GetSuffix(), strDescs.suffixSite,
+			"string.suffix", fmt.Sprintf("does not have suffix `%s`", rules.GetSuffix()))
 		rules.ProtoReflect().Clear(strDescs.suffixSite.desc)
 		hasRule = true
 	}
 
-	var containsVal *string
 	if rules.HasContains() {
-		containsVal = new(rules.GetContains())
+		eval.contains = newFixedRule(rules.GetContains(), strDescs.containsSite,
+			"string.contains", fmt.Sprintf("does not contain substring `%s`", rules.GetContains()))
 		rules.ProtoReflect().Clear(strDescs.containsSite.desc)
 		hasRule = true
 	}
 
-	var notContains *string
 	if rules.HasNotContains() {
-		notContains = new(rules.GetNotContains())
+		eval.notContains = newFixedRule(rules.GetNotContains(), strDescs.notContainsSite,
+			"string.not_contains", fmt.Sprintf("contains substring `%s`", rules.GetNotContains()))
 		rules.ProtoReflect().Clear(strDescs.notContainsSite.desc)
 		hasRule = true
 	}
 
-	var inVals []string
-	if inVals = rules.GetIn(); len(inVals) > 0 {
+	if inVals := rules.GetIn(); len(inVals) > 0 {
+		eval.inVals = newFixedRule(inVals, strDescs.inSite,
+			"string.in", "must be in list "+formatStringList(inVals))
+		eval.inRuleValue = sliceToListValue(&validate.StringRules{}, strDescs.inSite.desc, inVals, protoreflect.ValueOfString)
 		rules.ProtoReflect().Clear(strDescs.inSite.desc)
 		hasRule = true
 	}
 
-	var notInVals []string
-	if notInVals = rules.GetNotIn(); len(notInVals) > 0 {
+	if notInVals := rules.GetNotIn(); len(notInVals) > 0 {
+		eval.notInVals = newFixedRule(notInVals, strDescs.notInSite,
+			"string.not_in", "must not be in list "+formatStringList(notInVals))
+		eval.notInRuleValue = sliceToListValue(&validate.StringRules{}, strDescs.notInSite.desc, notInVals, protoreflect.ValueOfString)
 		rules.ProtoReflect().Clear(strDescs.notInSite.desc)
 		hasRule = true
 	}
@@ -166,28 +176,7 @@ func tryBuildNativeStringRules(base base, rules *validate.StringRules) evaluator
 	if !hasRule {
 		return nil
 	}
-
-	return &nativeStringEval{
-		base:          base,
-		constVal:      constVal,
-		inVals:        inVals,
-		notInVals:     notInVals,
-		exactLen:      exactLen,
-		minLen:        minLen,
-		maxLen:        maxLen,
-		exactBytes:    exactBytes,
-		minBytes:      minBytes,
-		maxBytes:      maxBytes,
-		pattern:       compiledPattern,
-		patternStr:    patternStr,
-		prefix:        prefix,
-		suffix:        suffix,
-		contains:      containsVal,
-		notContains:   notContains,
-		wellKnownRule: wellKnownRule,
-		knownRegex:    knownRegex,
-		strict:        strict,
-	}
+	return eval
 }
 
 // stringDescriptors bundles the field descriptors for StringRules.
@@ -359,24 +348,26 @@ var (
 // max_bytes, pattern, prefix, suffix, contains, and not_contains.
 type nativeStringEval struct {
 	base
-	constVal      *string
-	inVals        []string
-	notInVals     []string
-	exactLen      *uint64
-	minLen        *uint64
-	maxLen        *uint64
-	exactBytes    *uint64
-	minBytes      *uint64
-	maxBytes      *uint64
-	pattern       *regexp.Regexp
-	patternStr    string
-	prefix        *string
-	suffix        *string
-	contains      *string
-	notContains   *string
-	wellKnownRule *stringWellKnownRule
-	knownRegex    validate.KnownRegex
-	strict        bool
+	constVal       *fixedRule[string]
+	inVals         *fixedRule[[]string]
+	inRuleValue    protoreflect.Value
+	notInVals      *fixedRule[[]string]
+	notInRuleValue protoreflect.Value
+	exactLen       *fixedRule[uint64]
+	minLen         *fixedRule[uint64]
+	maxLen         *fixedRule[uint64]
+	exactBytes     *fixedRule[uint64]
+	minBytes       *fixedRule[uint64]
+	maxBytes       *fixedRule[uint64]
+	pattern        *regexp.Regexp
+	patternStr     *fixedRule[string]
+	prefix         *fixedRule[string]
+	suffix         *fixedRule[string]
+	contains       *fixedRule[string]
+	notContains    *fixedRule[string]
+	wellKnownRule  *stringWellKnownRule
+	knownRegex     validate.KnownRegex
+	strict         bool
 }
 
 //nolint:gocyclo // this code has nested ifs but it's not hard to follow.
@@ -384,10 +375,9 @@ func (n *nativeStringEval) Evaluate(_ protoreflect.Message, val protoreflect.Val
 	strVal := val.String()
 	var violations []*Violation
 
-	if n.constVal != nil && strVal != *n.constVal {
-		violations = append(violations, n.newViolation(strDescs.constSite,
-			"string.const", fmt.Sprintf("must equal `%s`", *n.constVal),
-			val, protoreflect.ValueOfString(*n.constVal)))
+	if n.constVal != nil && strVal != n.constVal.value {
+		violations = append(violations, n.newViolation(n.constVal.site, "", "",
+			val, protoreflect.ValueOfString(n.constVal.value)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
@@ -395,82 +385,71 @@ func (n *nativeStringEval) Evaluate(_ protoreflect.Message, val protoreflect.Val
 
 	if n.exactLen != nil || n.minLen != nil || n.maxLen != nil {
 		runeCount := uint64(utf8.RuneCountInString(strVal)) //nolint:gosec // cannot be negative
-		if vs := n.evaluateLength(runeCount, val); len(vs) > 0 {
-			violations = append(violations, vs...)
-			if cfg.failFast {
-				return &ValidationError{Violations: violations[:1]}
-			}
+		before := len(violations)
+		violations = n.appendLengthViolations(violations, runeCount, val, n.exactLen, n.minLen, n.maxLen)
+		if cfg.failFast && len(violations) > before {
+			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
 	if n.exactBytes != nil || n.minBytes != nil || n.maxBytes != nil {
 		byteCount := uint64(len(strVal))
-		if vs := n.evaluateByteLength(byteCount, val); len(vs) > 0 {
-			violations = append(violations, vs...)
-			if cfg.failFast {
-				return &ValidationError{Violations: violations[:1]}
-			}
+		before := len(violations)
+		violations = n.appendLengthViolations(violations, byteCount, val, n.exactBytes, n.minBytes, n.maxBytes)
+		if cfg.failFast && len(violations) > before {
+			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
 	if n.pattern != nil && !n.pattern.MatchString(strVal) {
-		violations = append(violations, n.newViolation(strDescs.patternSite,
-			"string.pattern", fmt.Sprintf("does not match regex pattern `%s`", n.patternStr),
-			val, protoreflect.ValueOfString(n.patternStr)))
+		violations = append(violations, n.newViolation(n.patternStr.site, "", "",
+			val, protoreflect.ValueOfString(n.patternStr.value)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
-	if n.prefix != nil && !strings.HasPrefix(strVal, *n.prefix) {
-		violations = append(violations, n.newViolation(strDescs.prefixSite,
-			"string.prefix", fmt.Sprintf("does not have prefix `%s`", *n.prefix),
-			val, protoreflect.ValueOfString(*n.prefix)))
+	if n.prefix != nil && !strings.HasPrefix(strVal, n.prefix.value) {
+		violations = append(violations, n.newViolation(n.prefix.site, "", "",
+			val, protoreflect.ValueOfString(n.prefix.value)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
-	if n.suffix != nil && !strings.HasSuffix(strVal, *n.suffix) {
-		violations = append(violations, n.newViolation(strDescs.suffixSite,
-			"string.suffix", fmt.Sprintf("does not have suffix `%s`", *n.suffix),
-			val, protoreflect.ValueOfString(*n.suffix)))
+	if n.suffix != nil && !strings.HasSuffix(strVal, n.suffix.value) {
+		violations = append(violations, n.newViolation(n.suffix.site, "", "",
+			val, protoreflect.ValueOfString(n.suffix.value)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
-	if n.contains != nil && !strings.Contains(strVal, *n.contains) {
-		violations = append(violations, n.newViolation(strDescs.containsSite,
-			"string.contains", fmt.Sprintf("does not contain substring `%s`", *n.contains),
-			val, protoreflect.ValueOfString(*n.contains)))
+	if n.contains != nil && !strings.Contains(strVal, n.contains.value) {
+		violations = append(violations, n.newViolation(n.contains.site, "", "",
+			val, protoreflect.ValueOfString(n.contains.value)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
-	if n.notContains != nil && strings.Contains(strVal, *n.notContains) {
-		violations = append(violations, n.newViolation(strDescs.notContainsSite,
-			"string.not_contains", fmt.Sprintf("contains substring `%s`", *n.notContains),
-			val, protoreflect.ValueOfString(*n.notContains)))
+	if n.notContains != nil && strings.Contains(strVal, n.notContains.value) {
+		violations = append(violations, n.newViolation(n.notContains.site, "", "",
+			val, protoreflect.ValueOfString(n.notContains.value)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
-	if len(n.inVals) > 0 && !slices.Contains(n.inVals, strVal) {
-		violations = append(violations, n.newViolation(strDescs.inSite,
-			"string.in", "must be in list "+formatStringList(n.inVals),
-			val, sliceToListValue(&validate.StringRules{}, strDescs.inSite.desc, n.inVals, protoreflect.ValueOfString)))
+	if n.inVals != nil && !slices.Contains(n.inVals.value, strVal) {
+		violations = append(violations, n.newViolation(n.inVals.site, "", "", val, n.inRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
 	}
 
-	if len(n.notInVals) > 0 && slices.Contains(n.notInVals, strVal) {
-		violations = append(violations, n.newViolation(strDescs.notInSite,
-			"string.not_in", "must not be in list "+formatStringList(n.notInVals),
-			val, sliceToListValue(&validate.StringRules{}, strDescs.notInSite.desc, n.notInVals, protoreflect.ValueOfString)))
+	if n.notInVals != nil && slices.Contains(n.notInVals.value, strVal) {
+		violations = append(violations, n.newViolation(n.notInVals.site, "", "", val, n.notInRuleValue))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations[:1]}
 		}
@@ -558,53 +537,27 @@ func (n *nativeStringEval) checkKnownRegex(strVal string, val protoreflect.Value
 	return nil
 }
 
-// it would be worse to unify this and evaluateLength than it is to leave them as
-// very similar bits of code
-//
-//nolint:dupl
-func (n *nativeStringEval) evaluateByteLength(byteCount uint64, val protoreflect.Value) []*Violation {
-	var out []*Violation
-	if n.exactBytes != nil && byteCount != *n.exactBytes {
-		out = append(out, n.newViolation(strDescs.lenBytesSite,
-			"string.len_bytes", fmt.Sprintf("must be %d bytes", *n.exactBytes),
-			val, protoreflect.ValueOfUint64(*n.exactBytes)))
+// appendLengthViolations appends the violations of the exact, minimum, and
+// maximum length rules for a string's length in characters or bytes.
+func (n *nativeStringEval) appendLengthViolations(
+	violations []*Violation,
+	length uint64,
+	val protoreflect.Value,
+	exact, minimum, maximum *fixedRule[uint64],
+) []*Violation {
+	if exact != nil && length != exact.value {
+		violations = append(violations, n.newViolation(exact.site, "", "",
+			val, protoreflect.ValueOfUint64(exact.value)))
 	}
-	if n.minBytes != nil && byteCount < *n.minBytes {
-		out = append(out, n.newViolation(strDescs.minBytesSite,
-			"string.min_bytes", fmt.Sprintf("must be at least %d bytes", *n.minBytes),
-			val, protoreflect.ValueOfUint64(*n.minBytes)))
+	if minimum != nil && length < minimum.value {
+		violations = append(violations, n.newViolation(minimum.site, "", "",
+			val, protoreflect.ValueOfUint64(minimum.value)))
 	}
-	if n.maxBytes != nil && byteCount > *n.maxBytes {
-		out = append(out, n.newViolation(strDescs.maxBytesSite,
-			"string.max_bytes", fmt.Sprintf("must be at most %d bytes", *n.maxBytes),
-			val, protoreflect.ValueOfUint64(*n.maxBytes)))
+	if maximum != nil && length > maximum.value {
+		violations = append(violations, n.newViolation(maximum.site, "", "",
+			val, protoreflect.ValueOfUint64(maximum.value)))
 	}
-	return out
-}
-
-// it would be worse to unify this and evaluateByteLength than it is to leave them as
-// very similar bits of code
-//
-//nolint:dupl
-func (n *nativeStringEval) evaluateLength(runeCount uint64, val protoreflect.Value) []*Violation {
-	var out []*Violation
-
-	if n.exactLen != nil && runeCount != *n.exactLen {
-		out = append(out, n.newViolation(strDescs.lenSite,
-			"string.len", fmt.Sprintf("must be %d characters", *n.exactLen),
-			val, protoreflect.ValueOfUint64(*n.exactLen)))
-	}
-	if n.minLen != nil && runeCount < *n.minLen {
-		out = append(out, n.newViolation(strDescs.minLenSite,
-			"string.min_len", fmt.Sprintf("must be at least %d characters", *n.minLen),
-			val, protoreflect.ValueOfUint64(*n.minLen)))
-	}
-	if n.maxLen != nil && runeCount > *n.maxLen {
-		out = append(out, n.newViolation(strDescs.maxLenSite,
-			"string.max_len", fmt.Sprintf("must be at most %d characters", *n.maxLen),
-			val, protoreflect.ValueOfUint64(*n.maxLen)))
-	}
-	return out
+	return violations
 }
 
 func (n *nativeStringEval) Tautology() bool {
