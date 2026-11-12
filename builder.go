@@ -603,6 +603,8 @@ func (bldr *builder) tryNativeRules(
 		native = tryBuildNativeEnumRules(base, rules.GetEnum(), fdesc.Enum().Values())
 	case protoreflect.BytesKind:
 		native = tryBuildNativeBytesRules(base, rules.GetBytes())
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		native = tryBuildNativeTimeRules(base, rules, fdesc.Message())
 	default:
 		return nil
 	}
