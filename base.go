@@ -117,6 +117,20 @@ func fixedMessageSite(site ruleSite, ruleID string, message string) ruleSite {
 	return site
 }
 
+// fixedRule is a rule value along with the site of its violations, whose
+// message only depends on the rule value.
+type fixedRule[T any] struct {
+	value T
+	site  ruleSite
+}
+
+func newFixedRule[T any](value T, site ruleSite, ruleID string, message string) *fixedRule[T] {
+	return &fixedRule[T]{
+		value: value,
+		site:  fixedMessageSite(site, ruleID, message),
+	}
+}
+
 func (b *base) newViolation(
 	site ruleSite,
 	ruleID string,

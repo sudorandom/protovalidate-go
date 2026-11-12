@@ -71,6 +71,10 @@ func tryNativeMapRules(base base, rules *validate.MapRules) evaluator {
 		base:     base,
 		minPairs: minPairs,
 		maxPairs: maxPairs,
+		minPairsSite: fixedMessageSite(mapMinPairsSite,
+			"map.min_pairs", fmt.Sprintf("map must be at least %d entries", minPairs)),
+		maxPairsSite: fixedMessageSite(mapMaxPairsSite,
+			"map.max_pairs", fmt.Sprintf("map must be at most %d entries", maxPairs)),
 	}
 }
 
@@ -81,8 +85,10 @@ var _ evaluator = (*nativeMapEval)(nil)
 // by the kvPairs evaluator in map.go.
 type nativeMapEval struct {
 	base
-	minPairs uint64
-	maxPairs uint64
+	minPairs     uint64
+	maxPairs     uint64
+	minPairsSite ruleSite
+	maxPairsSite ruleSite
 }
 
 func (n *nativeMapEval) Evaluate(_ protoreflect.Message, val protoreflect.Value, cfg *validationConfig) error {
@@ -91,9 +97,7 @@ func (n *nativeMapEval) Evaluate(_ protoreflect.Message, val protoreflect.Value,
 
 	// min_pairs
 	if size < n.minPairs {
-		violations = append(violations, n.newViolation(mapMinPairsSite,
-			"map.min_pairs",
-			fmt.Sprintf("map must be at least %d entries", n.minPairs),
+		violations = append(violations, n.newViolation(n.minPairsSite, "", "",
 			val, protoreflect.ValueOfUint64(n.minPairs)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
@@ -102,9 +106,7 @@ func (n *nativeMapEval) Evaluate(_ protoreflect.Message, val protoreflect.Value,
 
 	// max_pairs
 	if size > n.maxPairs {
-		violations = append(violations, n.newViolation(mapMaxPairsSite,
-			"map.max_pairs",
-			fmt.Sprintf("map must be at most %d entries", n.maxPairs),
+		violations = append(violations, n.newViolation(n.maxPairsSite, "", "",
 			val, protoreflect.ValueOfUint64(n.maxPairs)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}

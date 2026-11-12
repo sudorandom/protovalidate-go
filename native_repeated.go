@@ -91,6 +91,10 @@ func tryNativeRepeatedRules(base base, rules *validate.RepeatedRules) evaluator 
 		minItems: minItems,
 		maxItems: maxItems,
 		uniqueFn: uniqueFn,
+		minItemsSite: fixedMessageSite(repeatedMinItemsSite,
+			"repeated.min_items", fmt.Sprintf("must contain at least %d item(s)", minItems)),
+		maxItemsSite: fixedMessageSite(repeatedMaxItemsSite,
+			"repeated.max_items", fmt.Sprintf("must contain no more than %d item(s)", maxItems)),
 	}
 }
 
@@ -159,7 +163,9 @@ type nativeRepeatedEval struct {
 	maxItems uint64
 	// uniqueFn is nil when the `unique` rule is not active. When set, it is
 	// specialized for the field's element kind at compile time.
-	uniqueFn uniqueChecker
+	uniqueFn     uniqueChecker
+	minItemsSite ruleSite
+	maxItemsSite ruleSite
 }
 
 func (n *nativeRepeatedEval) Evaluate(_ protoreflect.Message, val protoreflect.Value, cfg *validationConfig) error {
@@ -168,9 +174,7 @@ func (n *nativeRepeatedEval) Evaluate(_ protoreflect.Message, val protoreflect.V
 	var violations []*Violation
 
 	if size < n.minItems {
-		violations = append(violations, n.newViolation(repeatedMinItemsSite,
-			"repeated.min_items",
-			fmt.Sprintf("must contain at least %d item(s)", n.minItems),
+		violations = append(violations, n.newViolation(n.minItemsSite, "", "",
 			val, protoreflect.ValueOfUint64(n.minItems)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
@@ -178,9 +182,7 @@ func (n *nativeRepeatedEval) Evaluate(_ protoreflect.Message, val protoreflect.V
 	}
 
 	if size > n.maxItems {
-		violations = append(violations, n.newViolation(repeatedMaxItemsSite,
-			"repeated.max_items",
-			fmt.Sprintf("must contain no more than %d item(s)", n.maxItems),
+		violations = append(violations, n.newViolation(n.maxItemsSite, "", "",
 			val, protoreflect.ValueOfUint64(n.maxItems)))
 		if cfg.failFast {
 			return &ValidationError{Violations: violations}
